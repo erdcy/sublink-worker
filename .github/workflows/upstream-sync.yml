@@ -1,0 +1,52 @@
+name: Upstream Sync
+
+on:
+  schedule:
+    # 每天 UTC 时间 0 点（北京时间 08:00）自动运行一次
+    - cron: '0 0 * * *'
+  # 允许在 Actions 页面手动触发测试
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout forked repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # 使用带 workflow 权限的 PAT 检出，否则无法推送 workflow 文件
+          token: ${{ secrets.PAT }}
+
+      - name: Sync with upstream
+        run: |
+          # 1. 备份当前的 upstream-sync.yml，防止 reset 时被删除
+          cp .github/workflows/upstream-sync.yml /tmp/upstream-sync.yml
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/7Sageer/sublink-worker
+          git fetch upstream
+          
+          # 2. 强制对齐上游代码
+          git reset --hard upstream/main
+
+          # 3. 恢复你的 workflow 文件
+          mkdir -p .github/workflows
+          cp /tmp/upstream-sync.yml .github/workflows/upstream-sync.yml
+
+      - name: Replace SUBLINK_KV ID
+        env:
+          MY_KV_ID: ${{ secrets.SUBLINK_KV_ID }}
+        run: |
+          sed -i -E 's/(binding = "SUBLINK_KV", id = ")[^"]+(")/\1'"$MY_KV_ID"'\2/' wrangler.toml
+          cat wrangler.toml
+
+      - name: Commit and Push changes
+        run: |
+          git add wrangler.toml .github/workflows/upstream-sync.yml
+          git diff-index --quiet HEAD || git commit -m "chore: sync upstream and update SUBLINK_KV id"
+          git push origin main --force
